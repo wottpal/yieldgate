@@ -1,23 +1,13 @@
-import { ContractAddresses } from '@addresses/index'
-import YieldGate from '@artifacts/contracts/YieldGate.sol/YieldGate.json'
-import {
-  Container,
-  Flex,
-  Grid,
-  GridItem, VStack
-} from '@chakra-ui/react'
-import { CreatorCard } from '@components/CreatorCard'
+import { Center, Container, Flex, Grid, GridItem, Spinner, VStack } from '@chakra-ui/react'
+import { CreatorCard } from '@components/creator/CreatorCard'
 import Feed from '@components/Feed'
 import Layout from '@components/layout/Layout'
 import NewPostForm from '@components/NewPostForm'
 import SponsorsCard from '@components/SponsorsCard'
 import { Creator } from '@entities/Creator.entity'
-import { env } from '@lib/environment'
-import { ethers } from 'ethers'
+import { useSupporterAmountStaked } from '@lib/creatorReadHooks'
 import { useRouter } from 'next/router'
-import * as React from 'react'
-import { useState } from 'react'
-import { YieldGate as YieldGateType } from 'types/typechain'
+import { useEffect, useState } from 'react'
 import { useAsyncEffect } from 'use-async-effect'
 import { useAccount } from 'wagmi'
 
@@ -25,16 +15,21 @@ export default function UsersPage() {
   const router = useRouter()
   let { walletId } = router.query
   walletId = ((walletId as string) || '').toLowerCase()
-  const [{ data: account }] = useAccount({
-    fetchEns: true,
-  })
+  const { data: accountData } = useAccount()
   const isOwner =
     walletId &&
-    account?.address &&
-    account?.address.toLowerCase() === walletId.toLowerCase()
+    accountData?.address &&
+    accountData?.address.toLowerCase() === walletId.toLowerCase()
   const [creator, setCreator] = useState<Creator | null>(null)
-  const [{ data: accountData }, disconnect] = useAccount()
-
+  const { supporterAmountStaked, refetch: refetchSupporterAmountStaked } = useSupporterAmountStaked({ supporter: accountData?.address, beneficiary: creator?.address })
+  const [contentIsLocked, setContentIsLocked] = useState(true)
+  
+  // Content Lock
+  useEffect(() => {
+    setContentIsLocked(!isOwner && (supporterAmountStaked || 0) <= 0)
+  }, [supporterAmountStaked])
+  
+  // Fetch Creator
   const fetchCreator = async (): Promise<Creator> => {
     const res = await fetch('/api/creators/getCreator', {
       method: 'POST',
@@ -49,7 +44,6 @@ export default function UsersPage() {
     const { creator }: { creator: Creator } = await res.json()
     return creator
   }
-
   useAsyncEffect(async () => {
     if (!walletId) {
       setCreator(null)
@@ -59,29 +53,7 @@ export default function UsersPage() {
     setCreator(creator)
   }, [walletId])
 
-  const YieldGateContractAddress = ContractAddresses['80001'].YieldGate
-  const [supporterIsStaking, setSupporterIsStaking] = useState(false)
-  const readSupporterStakedAmount = async () => {
-    const provider = ethers.getDefaultProvider(env.rpc.polygonMumbai)
-    const supporter = accountData?.address
-    const beneficiary = creator?.address
-    if (!supporter || !beneficiary) {
-      setSupporterIsStaking(false)
-      return
-    }
-    const contract = new ethers.Contract(
-      YieldGateContractAddress,
-      YieldGate.abi,
-      provider
-    ) as YieldGateType
-    const value = await contract.supporterStaked(supporter, beneficiary)
-    setSupporterIsStaking(value.gt(0))
-  }
-  React.useEffect(() => {
-    readSupporterStakedAmount()
-  }, [accountData?.address, creator?.address])
-
-
+  // Check if wallet-address is valid
   if (
     typeof walletId !== 'string' ||
     !/^0x[a-fA-F0-9]{40}$/.test(walletId as string)
@@ -89,29 +61,33 @@ export default function UsersPage() {
     return <>Not a valid address</>
   }
 
-  return (
-    <>
-      <Layout>
-        <Container maxW="5xl">
-          <Grid templateColumns="350px 1fr" gap={10} py={10}>
-            <Flex direction="column" gap={10} width="full">
-              <VStack
-                position="sticky"
-                spacing={8}
-                width="full"
-                align="stretch"
-              >
-                <CreatorCard creator={creator} isOwner={isOwner} updateContentIsLocked={readSupporterStakedAmount} />
-                <SponsorsCard sponsors={creator?.supporters} />
-              </VStack>
-            </Flex>
-            <GridItem>
-              {isOwner && <NewPostForm creator={creator} setCreator={setCreator} />}
-              <Feed feed={creator?.posts || []} isLocked={!supporterIsStaking && !isOwner} />
-            </GridItem>
-          </Grid>
-        </Container>
-      </Layout>
-    </>
-  )
+  if (!creator) return <>
+    <Center>
+      <Spinner size='xl' my='100' />
+    </Center>
+  </>
+
+  return (<>
+    <Layout>
+      <Container maxW="5xl">
+        <Grid templateColumns="350px 1fr" gap={10} py={10}>
+          <Flex direction="column" gap={10} width="full">
+            <VStack
+              position="sticky"
+              spacing={8}
+              width="full"
+              align="stretch"
+            >
+              <CreatorCard creator={creator} isOwner={!!isOwner} updateContentIsLocked={refetchSupporterAmountStaked} />
+              <SponsorsCard sponsors={creator?.supporters} />
+            </VStack>
+          </Flex>
+          <GridItem>
+            {isOwner && <NewPostForm creator={creator} setCreator={setCreator} />}
+            <Feed feed={creator?.posts || []} isLocked={contentIsLocked} />
+          </GridItem>
+        </Grid>
+      </Container>
+    </Layout>
+  </>)
 }
